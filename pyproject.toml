@@ -1,0 +1,20 @@
+[project]
+name = "code-factory"
+version = "0.1.0"
+description = "AI-driven code factory: orchestrate Claude Code and Codex agents to build Django projects in parallel"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+code-factory = "factory:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "strict"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
