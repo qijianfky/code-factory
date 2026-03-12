@@ -378,6 +378,42 @@ def _classify_failure(message: str) -> FailureKind:
     return FailureKind.RETRYABLE
 
 
+def _is_superseded_failure(task: Task) -> bool:
+    """Failures that are expected to remain after a successful reroute/rerun."""
+    return (
+        task.status == TaskStatus.FAILED
+        and task.failure_kind in {
+            FailureKind.SCOPE_VIOLATION,
+            FailureKind.OWNER_HANDOFF_REQUIRED,
+        }
+    )
+
+
+def _has_blocking_failures(module: Module) -> bool:
+    """Return True when the module still has unresolved failures."""
+    return any(
+        task.status == TaskStatus.FAILED and not _is_superseded_failure(task)
+        for task in module.tasks
+    )
+
+
+def _progress_totals(modules: list[Module]) -> tuple[int, int]:
+    """Count effective work items, excluding scope checks and superseded originals."""
+    total = sum(
+        1
+        for module in modules
+        for task in module.tasks
+        if task.kind != TaskKind.SCOPE_CHECK and not _is_superseded_failure(task)
+    )
+    merged = sum(
+        1
+        for module in modules
+        for task in module.tasks
+        if task.status == TaskStatus.MERGED and task.kind != TaskKind.SCOPE_CHECK
+    )
+    return total, merged
+
+
 def normalize_resume_state(modules: list[Module], project_dir: str = "") -> None:
     """Prepare saved state for a resume run."""
     for module in modules:
@@ -474,6 +510,12 @@ async def run_module(
                  and t.kind != TaskKind.SCOPE_CHECK)
     failed = sum(1 for t in module.tasks if t.status == TaskStatus.FAILED)
     log(f"  Module [{module.id}] tasks done: {merged} merged, {failed} failed")
+
+    if _has_blocking_failures(module):
+        module.status = ModuleStatus.FAILED
+        blocking = [t.id for t in module.tasks if t.status == TaskStatus.FAILED and not _is_superseded_failure(t)]
+        log(f"  Module [{module.id}] FAILED — unresolved task failures: {blocking}")
+        return
 
     if merged > 0:
         log(f"  E2E gate for [{module.id}]...")
@@ -591,19 +633,22 @@ async def run_factory(spec_file: str, mockup_dir: str, project_dir: str,
             break
 
     # Final E2E
-    log("=" * 60)
-    log("FINAL E2E VERIFICATION")
-    log("=" * 60)
-    passed, issues = await verify_project(project_dir)
-    log(f"Final E2E: {'PASSED' if passed else f'ISSUES: {issues}'}")
+    all_modules_passed = all(m.status == ModuleStatus.PASSED for m in modules)
+    if all_modules_passed:
+        log("=" * 60)
+        log("FINAL E2E VERIFICATION")
+        log("=" * 60)
+        passed, issues = await verify_project(project_dir)
+        log(f"Final E2E: {'PASSED' if passed else f'ISSUES: {issues}'}")
+    else:
+        log("=" * 60)
+        log("FINAL E2E VERIFICATION")
+        log("=" * 60)
+        log("Skipped final E2E because the pipeline has unresolved module failures.")
 
     # Summary
     stats = overall_stats(modules)
-    total_merged = stats.get("merged", 0)
-    # Don't count scope_check tasks in the total
-    real_tasks = sum(1 for m in modules for t in m.tasks if t.kind != TaskKind.SCOPE_CHECK)
-    real_merged = sum(1 for m in modules for t in m.tasks
-                      if t.status == TaskStatus.MERGED and t.kind != TaskKind.SCOPE_CHECK)
+    real_tasks, real_merged = _progress_totals(modules)
     log("=" * 60)
     log(f"DONE | {real_merged}/{real_tasks} tasks merged | {stats}")
     for m in modules:

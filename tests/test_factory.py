@@ -183,6 +183,48 @@ def test_run_module_stops_on_quick_check_failure(monkeypatch) -> None:
     assert captured["task_ids"] == ["sales-001"]
 
 
+def test_run_module_fails_on_blocking_terminal_failures(monkeypatch) -> None:
+    async def fail_verify(project_dir, tasks=None):
+        raise AssertionError("verify_project should not run with blocking failures")
+
+    monkeypatch.setattr(factory, "verify_project", fail_verify)
+
+    merged_task = Task(
+        id="sales-001",
+        title="Sales detail",
+        description="Implement detail page",
+        module_id="sales",
+        status=TaskStatus.MERGED,
+    )
+    failed_task = Task(
+        id="sales-002",
+        title="Sales ledger",
+        description="Implement ledger page",
+        module_id="sales",
+        status=TaskStatus.FAILED,
+        error="review rejected",
+        failure_kind=FailureKind.REVIEW_REJECTED,
+    )
+    module = Module(
+        id="sales",
+        name="Sales",
+        phase=1,
+        owned_paths=["sales/"],
+        tasks=[merged_task, failed_task],
+    )
+
+    asyncio.run(
+        factory.run_module(
+            module,
+            "/tmp/project",
+            base_branch="feature/unified-architecture",
+            branch_prefix="codex/",
+        )
+    )
+
+    assert module.status == ModuleStatus.FAILED
+
+
 def test_normalize_resume_state_retries_failed_work() -> None:
     failed_task = Task(
         id="sales-001",
@@ -247,3 +289,77 @@ def test_normalize_resume_state_materializes_scope_followups(tmp_path) -> None:
     assert len(scope_tasks) == 1
     assert scope_tasks[0].status == TaskStatus.PENDING
     assert original.status == TaskStatus.FAILED
+
+
+def test_progress_totals_exclude_superseded_failures() -> None:
+    original = Task(
+        id="sales-001",
+        title="Sales detail",
+        description="Implement detail page",
+        module_id="sales",
+        status=TaskStatus.FAILED,
+        failure_kind=FailureKind.SCOPE_VIOLATION,
+    )
+    rerun = Task(
+        id="sales-001-rerun1",
+        title="[Rerun] Sales detail",
+        description="Implement detail page",
+        module_id="sales",
+        kind=TaskKind.RERUN,
+        status=TaskStatus.MERGED,
+    )
+    owner = Task(
+        id="sales-001-owner1-a1",
+        title="[Owner Handoff A1] Sales detail",
+        description="Implement shared file change",
+        module_id="sales",
+        kind=TaskKind.OWNER_HANDOFF,
+        status=TaskStatus.MERGED,
+    )
+    scope = Task(
+        id="sales-001-scope1",
+        title="Scope validation: Sales detail",
+        description="Check scope",
+        module_id="sales",
+        kind=TaskKind.SCOPE_CHECK,
+        status=TaskStatus.MERGED,
+    )
+    module = Module(id="sales", name="Sales", phase=1, tasks=[original, rerun, owner, scope])
+
+    total, merged = factory._progress_totals([module])
+
+    assert total == 2
+    assert merged == 2
+
+
+def test_run_factory_skips_final_e2e_after_module_failure(tmp_path, monkeypatch) -> None:
+    called = {"verify": False}
+
+    async def fake_run_module(module, project_dir, **kwargs):
+        module.status = ModuleStatus.FAILED
+
+    async def fail_verify(project_dir, tasks=None):
+        called["verify"] = True
+        raise AssertionError("verify_project should not run after pipeline failure")
+
+    monkeypatch.setattr(factory, "load_state", lambda project_dir: [
+        Module(id="sales", name="Sales", phase=1, tasks=[Task(
+            id="sales-001",
+            title="Sales detail",
+            description="Implement detail page",
+            module_id="sales",
+        )]),
+    ])
+    monkeypatch.setattr(factory, "normalize_resume_state", lambda modules, project_dir="": None)
+    monkeypatch.setattr(factory, "run_module", fake_run_module)
+    monkeypatch.setattr(factory, "verify_project", fail_verify)
+    monkeypatch.setattr(factory, "save_progress", lambda modules, project_dir: None)
+
+    try:
+        asyncio.run(factory.run_factory("", "", str(tmp_path), resume=True))
+    except SystemExit as exc:
+        assert exc.code == 1
+    else:
+        raise AssertionError("run_factory should exit non-zero when work remains")
+
+    assert called["verify"] is False
