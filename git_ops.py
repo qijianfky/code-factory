@@ -106,17 +106,22 @@ async def seed_assets(project_dir: str, spec_file: str, mockup_files: list[str])
 
 async def create_worktree(project_dir: str, branch: str,
                           base_branch: str = MAIN_BRANCH) -> str:
-    """Create a git worktree for isolated agent work."""
+    """Create or reuse a git worktree for isolated agent work.
+
+    If a worktree already exists from a previous timed-out attempt, preserve
+    any uncommitted work (stage + commit as a WIP checkpoint) so the next
+    agent can continue where the previous one left off.
+    """
     async with _git_write_lock:
         safe_name = branch.replace("/", "-")
         worktree_path = str(Path(project_dir).parent / ".factory-worktrees" / safe_name)
         Path(worktree_path).parent.mkdir(parents=True, exist_ok=True)
 
-        # Clean up if exists from previous failed run
         existing = Path(worktree_path)
         if existing.exists():
-            await run_git(["worktree", "remove", worktree_path, "--force"], project_dir)
-            await run_git(["branch", "-D", branch], project_dir)
+            # Salvage uncommitted work from the previous attempt
+            await _salvage_uncommitted_work(worktree_path, branch)
+            return worktree_path
 
         # Create branch from the configured integration branch.
         rc, _, err = await run_git(["branch", branch, base_branch], project_dir)
@@ -129,6 +134,18 @@ async def create_worktree(project_dir: str, branch: str,
         if rc != 0:
             raise RuntimeError(f"Failed to create worktree: {err}")
         return worktree_path
+
+
+async def _salvage_uncommitted_work(worktree_path: str, branch: str) -> None:
+    """Commit any uncommitted files in an existing worktree as a WIP checkpoint."""
+    rc, status, _ = await run_git(["status", "--porcelain"], worktree_path)
+    if rc != 0 or not status.strip():
+        return
+    await run_git(["add", "-A"], worktree_path)
+    await run_git(
+        ["commit", "-m", f"wip: salvaged from timed-out attempt on {branch}"],
+        worktree_path,
+    )
 
 
 async def merge_branch(project_dir: str, branch: str,

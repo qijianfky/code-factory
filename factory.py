@@ -197,13 +197,16 @@ async def execute_and_review(
                 task.error = str(e)
                 task.failure_kind = _classify_failure(str(e))
                 log(f"    [{task.id}] retry {task.retries}: {e}")
-        # Cleanup worktree on failure
-        if task.worktree:
+        # Keep worktree for retryable failures so next attempt can continue;
+        # only clean up on terminal failure.
+        if task.worktree and task.status == TaskStatus.FAILED:
             try:
                 await cleanup_worktree(project_dir, task.worktree, task.branch)
             except Exception as exc:
                 log(f"    [{task.id}] worktree cleanup failed: {exc}")
             task.worktree = ""
+        elif task.worktree and task.status == TaskStatus.PENDING:
+            log(f"    [{task.id}] keeping worktree for retry")
 
 
 async def merge_sequentially(tasks: list[Task], project_dir: str, *, base_branch: str) -> None:
@@ -233,6 +236,44 @@ async def merge_sequentially(tasks: list[Task], project_dir: str, *, base_branch
             except Exception as exc:
                 log(f"    [{task.id}] worktree cleanup failed: {exc}")
             task.worktree = ""
+
+
+def _is_serial_foundation_module(module: Module) -> bool:
+    """Keep only the shell/foundation bootstrap strictly serial."""
+    return module.phase == 0 and module.id in {"A1", "foundation"}
+
+
+async def _cleanup_inflight_tasks_after_gate_failure(
+    active: dict[asyncio.Task[None], Task],
+    project_dir: str,
+    *,
+    reason: str,
+) -> None:
+    """Cancel in-flight work promptly, then discard any unmerged work."""
+    if not active:
+        return
+
+    futures = list(active.keys())
+    for future in futures:
+        future.cancel()
+
+    results = await asyncio.gather(*futures, return_exceptions=True)
+    for future, result in zip(futures, results):
+        task = active.pop(future)
+        if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
+            log(f"    [{task.id}] background task raised after gate failure: {result}")
+
+        if task.worktree:
+            try:
+                await cleanup_worktree(project_dir, task.worktree, task.branch)
+            except Exception as exc:
+                log(f"    [{task.id}] worktree cleanup failed: {exc}")
+            task.worktree = ""
+
+        if task.status in (TaskStatus.READY, TaskStatus.RUNNING, TaskStatus.REVIEWING):
+            task.status = TaskStatus.PENDING
+            task.error = reason
+            task.failure_kind = FailureKind.RETRYABLE
 
 
 def handle_scope_violations(module: Module, project_dir: str = "") -> None:
@@ -444,67 +485,136 @@ async def run_module(
 ) -> None:
     """Run all tasks in a module, then E2E gate."""
     module.status = ModuleStatus.RUNNING
-    is_foundation = module.phase == 0
-    max_parallel = 1 if is_foundation else MAX_PARALLEL_AGENTS
+    is_serial_foundation = _is_serial_foundation_module(module)
+    max_parallel = 1 if is_serial_foundation else MAX_PARALLEL_AGENTS
 
     log(f"\n  Module [{module.id}] — {module.name} ({len(module.tasks)} tasks, "
-        f"{'sequential' if is_foundation else f'parallel max={max_parallel}'})")
+        f"{'sequential' if is_serial_foundation else f'parallel max={max_parallel}'})")
 
     iteration = 0
-    while not module_done(module):
-        iteration += 1
-        stats = module_stats(module)
-        log(f"    --- iteration {iteration} | {stats} ---")
+    if is_serial_foundation:
+        while not module_done(module):
+            iteration += 1
+            stats = module_stats(module)
+            log(f"    --- iteration {iteration} | {stats} ---")
 
-        ready = get_ready_tasks(module.tasks, max_parallel, completed_ids=upstream_completed_ids)
-        if not ready:
-            # Before declaring deadlock, check for pending scope resolution
-            handle_scope_violations(module, project_dir)
             ready = get_ready_tasks(module.tasks, max_parallel, completed_ids=upstream_completed_ids)
             if not ready:
-                pending = [t for t in module.tasks if t.status == TaskStatus.PENDING]
-                if pending:
-                    log(f"    DEADLOCK in module [{module.id}]")
-                    for t in pending:
-                        t.status = TaskStatus.FAILED
-                        t.error = "Deadlock"
-                        t.failure_kind = FailureKind.DEADLOCK
-                break
+                handle_scope_violations(module, project_dir)
+                ready = get_ready_tasks(module.tasks, max_parallel, completed_ids=upstream_completed_ids)
+                if not ready:
+                    pending = [t for t in module.tasks if t.status == TaskStatus.PENDING]
+                    if pending:
+                        log(f"    DEADLOCK in module [{module.id}]")
+                        for t in pending:
+                            t.status = TaskStatus.FAILED
+                            t.error = "Deadlock"
+                            t.failure_kind = FailureKind.DEADLOCK
+                    break
 
-        log(f"    Executing: {[t.id for t in ready]}")
+            log(f"    Executing: {[t.id for t in ready]}")
 
-        if is_foundation:
             for task in ready:
                 await execute_and_review(
                     task, project_dir, module, base_branch=base_branch, branch_prefix=branch_prefix,
                 )
                 if task.status == TaskStatus.REVIEWING:
                     await merge_sequentially([task], project_dir, base_branch=base_branch)
-        else:
-            await asyncio.gather(*[
-                execute_and_review(
-                    t, project_dir, module, base_branch=base_branch, branch_prefix=branch_prefix,
+
+                merged_tasks = [task] if task.status == TaskStatus.MERGED else []
+                if merged_tasks:
+                    ok, err = await quick_check(project_dir, merged_tasks)
+                    if not ok:
+                        log(f"    QUICK CHECK FAILED: {err[:200]}")
+                        module.status = ModuleStatus.FAILED
+                        module.e2e_issues = [err]
+                        for merged_task in merged_tasks:
+                            merged_task.failure_kind = FailureKind.QUICK_CHECK_FAILED
+                        log(f"  Module [{module.id}] stopped after quick-check failure")
+                        return
+
+            handle_scope_violations(module, project_dir)
+    else:
+        active: dict[asyncio.Task[None], Task] = {}
+
+        while not module_done(module):
+            iteration += 1
+            stats = module_stats(module)
+            log(f"    --- iteration {iteration} | {stats} ---")
+
+            while len(active) < max_parallel:
+                ready = get_ready_tasks(
+                    module.tasks,
+                    max_parallel - len(active),
+                    completed_ids=upstream_completed_ids,
                 )
-                for t in ready
-            ])
-            await merge_sequentially(ready, project_dir, base_branch=base_branch)
+                if not ready:
+                    if not active:
+                        handle_scope_violations(module, project_dir)
+                        ready = get_ready_tasks(
+                            module.tasks,
+                            max_parallel - len(active),
+                            completed_ids=upstream_completed_ids,
+                        )
+                        if not ready:
+                            pending = [t for t in module.tasks if t.status == TaskStatus.PENDING]
+                            if pending:
+                                log(f"    DEADLOCK in module [{module.id}]")
+                                for t in pending:
+                                    t.status = TaskStatus.FAILED
+                                    t.error = "Deadlock"
+                                    t.failure_kind = FailureKind.DEADLOCK
+                            break
+                    break
 
-        # Quick check after merges
-        merged_tasks = [t for t in ready if t.status == TaskStatus.MERGED]
-        merged_count = len(merged_tasks)
-        if merged_count > 0:
-            ok, err = await quick_check(project_dir, merged_tasks)
-            if not ok:
-                log(f"    QUICK CHECK FAILED: {err[:200]}")
-                module.status = ModuleStatus.FAILED
-                module.e2e_issues = [err]
-                for task in merged_tasks:
-                    task.failure_kind = FailureKind.QUICK_CHECK_FAILED
-                log(f"  Module [{module.id}] stopped after quick-check failure")
-                return
+                log(f"    Executing: {[t.id for t in ready]}")
+                for task in ready:
+                    future = asyncio.create_task(
+                        execute_and_review(
+                            task,
+                            project_dir,
+                            module,
+                            base_branch=base_branch,
+                            branch_prefix=branch_prefix,
+                        )
+                    )
+                    active[future] = task
 
-        # Handle scope violations → create scope_check / rerun tasks
-        handle_scope_violations(module, project_dir)
+            if not active:
+                break
+
+            done, _ = await asyncio.wait(list(active.keys()), return_when=asyncio.FIRST_COMPLETED)
+            merged_tasks: list[Task] = []
+
+            for future in done:
+                task = active.pop(future)
+                try:
+                    await future
+                except Exception as exc:  # pragma: no cover - execute_and_review handles task failures
+                    log(f"    [{task.id}] execute_and_review raised unexpectedly: {exc}")
+
+                if task.status == TaskStatus.REVIEWING:
+                    await merge_sequentially([task], project_dir, base_branch=base_branch)
+                    if task.status == TaskStatus.MERGED:
+                        merged_tasks.append(task)
+
+            if merged_tasks:
+                ok, err = await quick_check(project_dir, merged_tasks)
+                if not ok:
+                    log(f"    QUICK CHECK FAILED: {err[:200]}")
+                    module.status = ModuleStatus.FAILED
+                    module.e2e_issues = [err]
+                    for task in merged_tasks:
+                        task.failure_kind = FailureKind.QUICK_CHECK_FAILED
+                    await _cleanup_inflight_tasks_after_gate_failure(
+                        active,
+                        project_dir,
+                        reason=f"Aborted after quick-check failure in module [{module.id}]",
+                    )
+                    log(f"  Module [{module.id}] stopped after quick-check failure")
+                    return
+
+            handle_scope_violations(module, project_dir)
 
     # E2E gate
     module.status = ModuleStatus.VERIFYING
@@ -630,10 +740,15 @@ async def run_factory(spec_file: str, mockup_dir: str, project_dir: str,
     log("EXECUTION")
     log("=" * 60)
 
-    for index, module in enumerate(modules):
+    index = 0
+    while index < len(modules):
+        module = modules[index]
+
         if module.status == ModuleStatus.PASSED:
             log(f"  Module [{module.id}] already passed, skipping")
+            index += 1
             continue
+
         upstream_completed_ids = _merged_task_ids(modules[:index])
         await run_module(
             module,
@@ -647,6 +762,7 @@ async def run_factory(spec_file: str, mockup_dir: str, project_dir: str,
         if module.status == ModuleStatus.FAILED:
             log(f"\n  Module [{module.id}] FAILED. Run with --resume to retry.")
             break
+        index += 1
 
     # Final E2E
     all_modules_passed = all(m.status == ModuleStatus.PASSED for m in modules)

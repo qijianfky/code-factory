@@ -4,8 +4,8 @@ import shutil
 import subprocess
 
 
-MAX_PARALLEL_AGENTS = 5
-AGENT_TIMEOUT = 900  # 15 minutes per task
+MAX_PARALLEL_AGENTS = 30
+AGENT_TIMEOUT = 3600  # 60 minutes per task
 MAX_RETRIES = 3
 
 MAIN_BRANCH = os.getenv("CODE_FACTORY_MAIN_BRANCH", "feature/unified-architecture")

@@ -2,6 +2,8 @@
 import asyncio
 
 from config import AGENT_TIMEOUT, agent_env, claude_command_args, codex_available, codex_command_args
+
+TIMEOUT_MINUTES = AGENT_TIMEOUT // 60
 from duerp_profile import load_lane_prompt_bundle
 from models import AgentType, Task, TaskStatus
 
@@ -29,6 +31,12 @@ Title: {task_title}
 
 ## Rules
 - You are on branch `{branch}`. Implement the task completely.
+- You have {timeout_minutes} minutes. Commit early and often — do NOT wait until the end.
+  If you are killed mid-work, uncommitted code is lost. Commit a working checkpoint
+  as soon as you have something functional, then iterate.
+- If the branch already has commits (from a previous timed-out attempt), inspect them
+  with `git log --oneline` and `git diff` to understand what was done, then continue
+  from there instead of starting over.
 - Read `_assets/` for spec and mockup images if you need design context.
 - EXPLORE existing code first: read related models, views, templates, URLs.
 - Follow the project's existing patterns (model style, template structure, URL naming).
@@ -91,6 +99,7 @@ def build_executor_prompt(task: Task, project_dir: str = "") -> str:
         owner_lane=task.owner_lane or "(current module owner)",
         lane_prompt_bundle=lane_prompt_bundle,
         branch=task.branch,
+        timeout_minutes=TIMEOUT_MINUTES,
         frontend_guidance=_frontend_guidance(task),
         review_feedback=feedback,
     )
@@ -150,6 +159,10 @@ async def _run_claude(prompt: str, cwd: str) -> bool:
     except asyncio.TimeoutError:
         proc.kill()
         raise
+    except asyncio.CancelledError:
+        proc.kill()
+        await proc.communicate()
+        raise
 
     return proc.returncode == 0
 
@@ -167,6 +180,10 @@ async def _run_codex(prompt: str, cwd: str) -> bool:
         await asyncio.wait_for(proc.communicate(), timeout=AGENT_TIMEOUT)
     except asyncio.TimeoutError:
         proc.kill()
+        raise
+    except asyncio.CancelledError:
+        proc.kill()
+        await proc.communicate()
         raise
 
     return proc.returncode == 0
