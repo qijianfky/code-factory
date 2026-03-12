@@ -118,14 +118,19 @@ def _frontend_guidance(task: Task) -> str:
 
 def _is_frontend_task(task: Task) -> bool:
     """Detect tasks that should use browser MCP + frontend skill workflow."""
-    frontend_markers = (
-        "templates/", "static/", ".html", ".css", ".js", ".ts", ".tsx", ".jsx",
-        "frontend", "ui", "ux", "layout", "page", "screen", "dashboard", "mockup",
+    file_markers = (
+        "static/", ".css", ".js", ".ts", ".tsx", ".jsx",
+    )
+    text_markers = (
+        "frontend", "ui", "ux", "layout", "page", "screen", "mockup",
         "design", "alpine", "tailwind", "htmx",
     )
-    haystacks = [task.title.lower(), task.description.lower()]
-    haystacks.extend(filepath.lower() for filepath in task.files)
-    return any(marker in haystack for haystack in haystacks for marker in frontend_markers)
+    file_haystacks = [filepath.lower() for filepath in task.files]
+    text_haystacks = [task.title.lower(), task.description.lower()]
+    return (
+        any(marker in haystack for haystack in file_haystacks for marker in file_markers)
+        or any(marker in haystack for haystack in text_haystacks for marker in text_markers)
+    )
 
 
 async def _run_claude(prompt: str, cwd: str) -> bool:
@@ -152,7 +157,7 @@ async def _run_claude(prompt: str, cwd: str) -> bool:
 async def _run_codex(prompt: str, cwd: str) -> bool:
     """Spawn Codex CLI (auto-detected command)."""
     proc = await asyncio.create_subprocess_exec(
-        *codex_command_args(), "exec", prompt,
+        *codex_command_args(), "exec", "-s", "workspace-write", prompt,
         cwd=cwd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,

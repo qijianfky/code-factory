@@ -65,32 +65,39 @@ async def review_task(task: Task, worktree_path: str,
 
 async def _review_with_codex(task: Task, worktree_path: str,
                              base_branch: str) -> tuple[bool, str]:
-    """Use Codex review command."""
+    """Use Codex exec in read-only mode for adversarial review."""
     review_instructions = (
+        "You are a code reviewer. Review the current branch changes.\n\n"
         f"Task: {task.title}\n"
         f"Description: {task.description}\n\n"
         f"Allowed files: {task.files}\n"
         f"Forbidden files: {task.forbidden_files[:10]}\n\n"
-        "Check: does the code implement the task correctly? "
-        "Did it modify forbidden files? Are there bugs? "
-        "Output JSON: {\"approved\": true/false, \"feedback\": \"...\"}\n"
+        "Instructions:\n"
+        f"1. Run `git diff {base_branch}...HEAD` to inspect the full change set.\n"
+        "2. Check whether the task is implemented correctly, whether any forbidden files "
+        "were modified, and whether there are bugs or missing edge cases.\n"
+        "3. Output ONLY JSON: "
+        "{\"approved\": true/false, \"feedback\": \"...\"}\n"
         "IMPORTANT: If in doubt, REJECT."
     )
 
     proc = await asyncio.create_subprocess_exec(
-        *codex_command_args(), "review", "--base", base_branch, review_instructions,
+        *codex_command_args(), "exec", "-s", "read-only", review_instructions,
         cwd=worktree_path,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
 
     try:
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=AGENT_TIMEOUT)
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=AGENT_TIMEOUT)
     except asyncio.TimeoutError:
         proc.kill()
         return False, "Review timed out — rejecting for safety"
 
     if proc.returncode != 0:
+        detail = stderr.decode()[:300].strip()
+        if detail:
+            return False, f"Review agent failed — rejecting for safety: {detail}"
         return False, "Review agent failed — rejecting for safety"
 
     return _parse_verdict(stdout.decode())

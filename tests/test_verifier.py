@@ -74,6 +74,15 @@ def test_load_gate_commands_prefers_agents_over_defaults(tmp_path) -> None:
     ]
 
 
+def test_load_gate_commands_uses_default_django_gates_without_overrides(tmp_path) -> None:
+    commands = load_gate_commands(str(tmp_path))
+
+    assert commands == [
+        ["python", "manage.py", "check"],
+        ["python", "manage.py", "makemigrations", "--check", "--dry-run"],
+    ]
+
+
 def test_load_gate_commands_rewrites_pytest_for_duerp_tasks(tmp_path) -> None:
     parallel = tmp_path / "docs" / "parallel"
     prompts = parallel / "prompts"

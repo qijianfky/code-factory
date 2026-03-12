@@ -364,6 +364,7 @@ def _is_retryable_failure(task: Task) -> bool:
         FailureKind.REVIEW_REJECTED,
         FailureKind.MERGE_CONFLICT,
         FailureKind.SCOPE_CHECK_FAILED,
+        FailureKind.DEADLOCK,
     }
 
 

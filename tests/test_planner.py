@@ -42,3 +42,39 @@ def test_plan_uses_duerp_profile_without_spawning_agent(tmp_path, monkeypatch) -
 
     assert result == modules
     assert (tmp_path / "factory_plan.json").exists()
+
+
+def test_plan_falls_back_to_factory_plan_file_when_stdout_is_not_json(tmp_path, monkeypatch) -> None:
+    (tmp_path / "factory_plan.json").write_text(
+        """{
+  "modules": [
+    {
+      "id": "foundation",
+      "name": "Base Foundation",
+      "phase": 0,
+      "owned_paths": ["templates/base.html"],
+      "tasks": []
+    }
+  ]
+}"""
+    )
+
+    monkeypatch.setattr(planner, "is_duerp_project", lambda project_dir: False)
+
+    class FakeProc:
+        returncode = 0
+
+        async def communicate(self):
+            return (
+                b"Plan written to `factory_plan.json`.\n\nAnalysis complete.",
+                b"",
+            )
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        return FakeProc()
+
+    monkeypatch.setattr(planner.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+    result = asyncio.run(planner.plan("", [], str(tmp_path)))
+
+    assert [module.id for module in result] == ["foundation"]

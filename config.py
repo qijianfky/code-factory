@@ -14,7 +14,8 @@ BRANCH_PREFIX = os.getenv("CODE_FACTORY_BRANCH_PREFIX", "codex/")
 CLAUDE_CMD = "claude"
 CLAUDE_MODEL = os.getenv("CODE_FACTORY_CLAUDE_MODEL", "claude-opus-4-6")
 CLAUDE_EFFORT = os.getenv("CODE_FACTORY_CLAUDE_EFFORT", "max")
-CODEX_MODEL = os.getenv("CODE_FACTORY_CODEX_MODEL", "gpt5.4ehigh")
+CODEX_MODEL = os.getenv("CODE_FACTORY_CODEX_MODEL", "")
+CODEX_EFFORT = os.getenv("CODE_FACTORY_CODEX_EFFORT", "xhigh")
 
 TASK_FILE = "task_list.json"
 PROGRESS_FILE = "factory-progress.txt"
@@ -36,7 +37,7 @@ PROTECTED_FILES = [
 # Override by placing a factory_gates.json in the project root
 DEFAULT_GATE_COMMANDS = [
     ["python", "manage.py", "check"],
-    ["python", "manage.py", "migrate", "--check"],
+    ["python", "manage.py", "makemigrations", "--check", "--dry-run"],
 ]
 
 AGENTS_GATE_SECTION = "构建 & 测试"
@@ -113,4 +114,6 @@ def codex_command_args() -> list[str]:
     args = list(_get_codex()[1])
     if CODEX_MODEL:
         args.extend(["-m", CODEX_MODEL])
+    if CODEX_EFFORT:
+        args.extend(["-c", f'model_reasoning_effort="{CODEX_EFFORT}"'])
     return args

@@ -257,6 +257,33 @@ def test_normalize_resume_state_retries_failed_work() -> None:
     assert failed_task.failure_kind == FailureKind.NONE
 
 
+def test_normalize_resume_state_retries_deadlock_tasks() -> None:
+    blocked_task = Task(
+        id="sales-002",
+        title="Sales ledger",
+        description="Implement ledger page",
+        module_id="sales",
+        status=TaskStatus.FAILED,
+        retries=1,
+        error="Deadlock",
+        failure_kind=FailureKind.DEADLOCK,
+    )
+    module = Module(
+        id="sales",
+        name="Sales",
+        phase=1,
+        status=ModuleStatus.FAILED,
+        tasks=[blocked_task],
+    )
+
+    factory.normalize_resume_state([module])
+
+    assert blocked_task.status == TaskStatus.PENDING
+    assert blocked_task.retries == 0
+    assert blocked_task.error == ""
+    assert blocked_task.failure_kind == FailureKind.NONE
+
+
 def test_normalize_resume_state_materializes_scope_followups(tmp_path) -> None:
     original = Task(
         id="sales-001",

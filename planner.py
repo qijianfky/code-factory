@@ -102,7 +102,11 @@ async def plan(spec_file: str, mockup_files: list[str], project_dir: str) -> lis
         raise RuntimeError(f"Planner failed: {stderr.decode()[:500]}")
 
     raw = stdout.decode()
-    plan_data = _extract_json_object(raw)
+    plan_path = Path(project_dir) / "factory_plan.json"
+    try:
+        plan_data = _extract_json_object(raw)
+    except ValueError as exc:
+        plan_data = _load_plan_from_file(plan_path, exc)
 
     # Validate: no overlapping owned_paths
     _validate_ownership(plan_data)
@@ -138,6 +142,25 @@ async def plan(spec_file: str, mockup_files: list[str], project_dir: str) -> lis
 
     modules.sort(key=lambda mod: mod.phase)
     return modules
+
+
+def _load_plan_from_file(plan_path: Path, parse_error: ValueError) -> dict:
+    """Load planner output from disk when the agent writes a plan file directly."""
+    if not plan_path.exists():
+        raise parse_error
+
+    try:
+        obj = json.loads(plan_path.read_text())
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"Could not extract JSON from planner output and {plan_path.name} was invalid JSON"
+        ) from exc
+
+    if not isinstance(obj, dict) or "modules" not in obj:
+        raise ValueError(
+            f"Could not extract JSON from planner output and {plan_path.name} did not contain a modules object"
+        )
+    return obj
 
 
 def _serialize_modules(modules: list[Module]) -> dict:
