@@ -240,7 +240,7 @@ DUERP_STATIC_TASKS = {
         {
             "id": "A8-102",
             "title": "实现税务/物流/通知渠道适配器",
-            "description": "接通 tax、logistics、email、sms，并为财务、仓储、通知、报表页面提供真实调用链。",
+            "description": "接通 tax、logistics、email、sms、wecom，并为财务、仓储、通知、报表页面提供真实调用链；企业微信通知也必须保持项目侧只改配置即可启用。",
         },
         {
             "id": "A8-103",
