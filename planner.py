@@ -226,24 +226,23 @@ def _validate_ownership(plan_data: dict) -> None:
 
 
 def _validate_modules(plan_data: dict) -> None:
-    """Validate task IDs and intra-module dependencies."""
+    """Validate task IDs and global task dependencies."""
     seen_task_ids: set[str] = set()
 
     for module in plan_data.get("modules", []):
-        task_ids = set()
         for task in module.get("tasks", []):
             task_id = task["id"]
             if task_id in seen_task_ids:
                 raise ValueError(f"Duplicate task id: {task_id}")
             seen_task_ids.add(task_id)
-            task_ids.add(task_id)
 
+    for module in plan_data.get("modules", []):
         for task in module.get("tasks", []):
             task_id = task["id"]
             for dep in task.get("dependencies", []):
                 if dep == task_id:
                     raise ValueError(f"Task [{task_id}] cannot depend on itself")
-                if dep not in task_ids:
+                if dep not in seen_task_ids:
                     raise ValueError(
                         f"Task [{task_id}] in module [{module['id']}] depends on unknown "
                         f"task [{dep}]"

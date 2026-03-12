@@ -59,6 +59,17 @@ def test_validate_modules_rejects_duplicate_task_ids() -> None:
         _validate_modules(plan)
 
 
+def test_validate_modules_allows_cross_module_dependency() -> None:
+    plan = {
+        "modules": [
+            {"id": "integrations", "tasks": [{"id": "A8-101", "dependencies": []}]},
+            {"id": "workspace", "tasks": [{"id": "A2-H8", "dependencies": ["A8-101"]}]},
+        ],
+    }
+
+    _validate_modules(plan)
+
+
 def test_plan_uses_duerp_profile_without_spawning_agent(tmp_path, monkeypatch) -> None:
     docs = tmp_path / "docs" / "parallel"
     docs.mkdir(parents=True)
