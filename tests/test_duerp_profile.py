@@ -161,6 +161,16 @@ def test_build_duerp_modules_adds_cross_module_integration_dependencies(tmp_path
             "settings_anchor": [".env.integrations.example"],
             "notes": "Travel provider should stay config-only",
         },
+        {
+            "id": "wecom_connect",
+            "lanes": ["A8", "A2"],
+            "modules": ["integrations", "workspace"],
+            "targets": ["H5-H7"],
+            "env_vars": ["WECOM_OAUTH_REDIRECT_URI", "WECOM_CALLBACK_TOKEN"],
+            "ui_anchor": "G5b 企业微信互通配置",
+            "settings_anchor": [".env.integrations.example"],
+            "notes": "WeCom deep connect should stay config-only",
+        },
     ], ensure_ascii=False))
     (docs / "SCREEN_MANIFEST.json").write_text(json.dumps([
         {
@@ -180,6 +190,15 @@ def test_build_duerp_modules_adds_cross_module_integration_dependencies(tmp_path
             "status": "planned",
             "mockup": None,
             "tags": ["travel", "booking"],
+        },
+        {
+            "screen_id": "H5",
+            "title": "审批待办",
+            "lane": "A2",
+            "module": "workspace",
+            "status": "planned",
+            "mockup": None,
+            "tags": ["approvals", "todo", "wecom_connect"],
         },
     ], ensure_ascii=False))
     (prompts / "codex-lane-template.md").write_text("# Codex Template")
@@ -225,6 +244,8 @@ def test_build_duerp_modules_adds_cross_module_integration_dependencies(tmp_path
     assert order.index("A8") < order.index("A2")
     assert next(task for task in a2.tasks if task.id == "A2-H9").dependencies == ["A7-core-001", "A8-101"]
     assert "AI_API_KEY" in next(task for task in a2.tasks if task.id == "A2-H9").description
+    assert next(task for task in a2.tasks if task.id == "A2-H5").dependencies == ["A8-104"]
+    assert "WECOM_OAUTH_REDIRECT_URI" in next(task for task in a2.tasks if task.id == "A2-H5").description
     assert next(task for task in a5.tasks if task.id == "A5-24h").dependencies == ["A8-102"]
     assert "TRAVEL_APP_ID" in next(task for task in a5.tasks if task.id == "A5-24h").description
 

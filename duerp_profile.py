@@ -247,6 +247,11 @@ DUERP_STATIC_TASKS = {
             "title": "整合硬件接口与健康面板",
             "description": "把 weighing、bank 接入统一健康聚合和设置页测试入口。",
         },
+        {
+            "id": "A8-104",
+            "title": "实现企业微信深度互通",
+            "description": "打通企业微信登录身份映射、消息深链接、审批待办直达、报表摘要投递和回调验签；互通能力只负责入口、摘要与轻量动作，复杂编辑必须回到 ERP 页面，且交付后项目侧只需填写 .env 即可启用。",
+        },
     ],
     "A9": [
         {
@@ -272,6 +277,7 @@ DUERP_A8_TASK_BY_SLOT = {
     "email": "A8-102",
     "sms": "A8-102",
     "wecom": "A8-102",
+    "wecom_connect": "A8-104",
     "bank": "A8-103",
     "weighing": "A8-103",
 }
@@ -285,6 +291,7 @@ DUERP_A8_TASK_BY_TAG = {
     "email": "A8-102",
     "sms": "A8-102",
     "wecom": "A8-102",
+    "wecom_connect": "A8-104",
     "bank": "A8-103",
     "weighing": "A8-103",
 }
