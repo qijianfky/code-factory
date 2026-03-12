@@ -2,15 +2,19 @@
 from models import Module, ModuleStatus, Task, TaskStatus
 
 
-def get_ready_tasks(tasks: list[Task], max_parallel: int = 5) -> list[Task]:
+def get_ready_tasks(
+    tasks: list[Task], max_parallel: int = 5, completed_ids: set[str] | None = None,
+) -> list[Task]:
     """Find tasks whose dependencies are all merged."""
-    completed_ids = {t.id for t in tasks if t.status == TaskStatus.MERGED}
+    satisfied_ids = {t.id for t in tasks if t.status == TaskStatus.MERGED}
+    if completed_ids:
+        satisfied_ids.update(completed_ids)
     ready = []
 
     for task in tasks:
         if task.status != TaskStatus.PENDING:
             continue
-        if all(dep in completed_ids for dep in task.dependencies):
+        if all(dep in satisfied_ids for dep in task.dependencies):
             task.status = TaskStatus.READY
             ready.append(task)
         if len(ready) >= max_parallel:

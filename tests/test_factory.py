@@ -225,6 +225,49 @@ def test_run_module_fails_on_blocking_terminal_failures(monkeypatch) -> None:
     assert module.status == ModuleStatus.FAILED
 
 
+def test_run_module_respects_upstream_completed_dependencies(monkeypatch) -> None:
+    async def fake_execute_and_review(task, project_dir, module, **kwargs):
+        task.status = TaskStatus.REVIEWING
+
+    async def fake_merge_sequentially(tasks, project_dir, **kwargs):
+        for task in tasks:
+            if task.status == TaskStatus.REVIEWING:
+                task.status = TaskStatus.MERGED
+
+    async def fake_quick_check(project_dir, tasks=None):
+        return True, ""
+
+    async def fake_verify(project_dir, tasks=None):
+        return True, []
+
+    monkeypatch.setattr(factory, "execute_and_review", fake_execute_and_review)
+    monkeypatch.setattr(factory, "merge_sequentially", fake_merge_sequentially)
+    monkeypatch.setattr(factory, "quick_check", fake_quick_check)
+    monkeypatch.setattr(factory, "verify_project", fake_verify)
+
+    task = Task(
+        id="dashboard-h9",
+        title="AI发文草稿",
+        description="Implement dashboard AI authoring screen",
+        module_id="A2",
+        dependencies=["A8-101"],
+    )
+    module = Module(id="A2", name="工作台", phase=1, owned_paths=["dashboard/"], tasks=[task])
+
+    asyncio.run(
+        factory.run_module(
+            module,
+            "/tmp/project",
+            base_branch="feature/unified-architecture",
+            branch_prefix="codex/",
+            upstream_completed_ids={"A8-101"},
+        )
+    )
+
+    assert task.status == TaskStatus.MERGED
+    assert module.status == ModuleStatus.PASSED
+
+
 def test_normalize_resume_state_retries_failed_work() -> None:
     failed_task = Task(
         id="sales-001",

@@ -25,13 +25,13 @@ DUERP_LANE_PHASES = {
     "A1": 0,
     "A7-core": 0,
     "A8-core": 0,
+    "A8": 1,
     "A2": 1,
     "A3": 1,
     "A5": 1,
     "A4": 2,
     "A6": 2,
     "A7": 2,
-    "A8": 3,
     "A9": 3,
 }
 
@@ -235,12 +235,12 @@ DUERP_STATIC_TASKS = {
         {
             "id": "A8-101",
             "title": "实现 AI/OCR/对象存储适配器",
-            "description": "接通通用 ai provider（默认 DeepSeek）、ocr、minio 三类适配器，并为页面入口提供真实门控；交付后项目侧应只需填写 .env 即可启用。",
+            "description": "接通通用 ai provider（默认 DeepSeek）、ocr、minio 三类适配器，并为自然语言填表、审批风险判断、驾驶舱问答、AI 发文提供结构化能力与真实门控；交付后项目侧应只需填写 .env 即可启用。",
         },
         {
             "id": "A8-102",
-            "title": "实现税务/物流/通知渠道适配器",
-            "description": "接通 tax、logistics、email、sms、wecom，并为财务、仓储、通知、报表页面提供真实调用链；企业微信通知也必须保持项目侧只改配置即可启用。",
+            "title": "实现税务/物流/通知/差旅适配器",
+            "description": "接通 tax、logistics、travel、email、sms、wecom，并为财务、仓储、差旅、通知、报表页面提供真实调用链；企业微信与差旅能力也必须保持项目侧只改配置即可启用。",
         },
         {
             "id": "A8-103",
@@ -251,7 +251,7 @@ DUERP_STATIC_TASKS = {
     "A9": [
         {
             "id": "A9-001",
-            "title": "66 屏 smoke 与前端回归",
+            "title": "全屏 smoke 与前端回归",
             "description": "按 SCREEN_MANIFEST 覆盖全部页面入口、模板渲染、页面 smoke 与前端截图回归。",
         },
         {
@@ -261,6 +261,37 @@ DUERP_STATIC_TASKS = {
         },
     ],
 }
+
+DUERP_A8_TASK_BY_SLOT = {
+    "ai": "A8-101",
+    "ocr": "A8-101",
+    "minio": "A8-101",
+    "tax": "A8-102",
+    "logistics": "A8-102",
+    "travel": "A8-102",
+    "email": "A8-102",
+    "sms": "A8-102",
+    "wecom": "A8-102",
+    "bank": "A8-103",
+    "attendance": "A8-103",
+    "weighing": "A8-103",
+}
+
+DUERP_A8_TASK_BY_TAG = {
+    "ai": "A8-101",
+    "ocr": "A8-101",
+    "travel": "A8-102",
+    "logistics": "A8-102",
+    "tax": "A8-102",
+    "email": "A8-102",
+    "sms": "A8-102",
+    "wecom": "A8-102",
+    "bank": "A8-103",
+    "attendance": "A8-103",
+    "weighing": "A8-103",
+}
+
+DUERP_A7_CORE_GUARD_TAGS = {"ai", "qa", "authoring", "risk"}
 
 
 @dataclass
@@ -429,7 +460,7 @@ def build_duerp_modules(project_dir: str) -> list[Module]:
         screens_by_lane.setdefault(screen.lane, []).append(screen)
 
     modules: list[Module] = []
-    module_order = ["A1", "A7-core", "A8-core", "A2", "A3", "A5", "A4", "A6", "A7", "A8", "A9"]
+    module_order = ["A1", "A7-core", "A8-core", "A8", "A2", "A3", "A5", "A4", "A6", "A7", "A9"]
 
     for module_id in module_order:
         lane = _duerp_base_lane(module_id)
@@ -460,7 +491,10 @@ def build_duerp_modules(project_dir: str) -> list[Module]:
                 if screen.status == "implemented":
                     continue
                 task_id = f"{module_id}-{screen.screen_id}"
-                dependencies = _infer_screen_dependencies(screen, screens_by_lane.get(lane, []), module_id)
+                dependencies = _dedupe_preserve(
+                    _infer_screen_dependencies(screen, screens_by_lane.get(lane, []), module_id)
+                    + _integration_dependencies_for_screen(project_dir, screen)
+                )
                 tasks.append(Task(
                     id=task_id,
                     title=screen.title,
@@ -675,6 +709,28 @@ def _infer_screen_dependencies(
     return [f"{module_id}-{best_candidate.screen_id}"]
 
 
+def _integration_dependencies_for_screen(project_dir: str, screen: ScreenSpec) -> list[str]:
+    dependencies: list[str] = []
+    screen_tags = set(screen.tags)
+
+    if screen_tags & DUERP_A7_CORE_GUARD_TAGS:
+        dependencies.append("A7-core-001")
+
+    for slot in load_key_slots(project_dir):
+        if not _targets_intersect(slot.targets, {screen.screen_id}):
+            continue
+        task_id = DUERP_A8_TASK_BY_SLOT.get(slot.id)
+        if task_id:
+            dependencies.append(task_id)
+
+    for tag in screen_tags:
+        task_id = DUERP_A8_TASK_BY_TAG.get(tag)
+        if task_id:
+            dependencies.append(task_id)
+
+    return _dedupe_preserve(dependencies)
+
+
 def _task_is_frontend(task: Task) -> bool:
     haystacks = [task.title.lower(), task.description.lower()]
     haystacks.extend(filepath.lower() for filepath in task.files)
@@ -762,7 +818,7 @@ def _select_key_slots(
     matches: list[tuple[int, KeySlotSpec]] = []
     for slot in load_key_slots(project_dir):
         score = 0
-        if targets.intersection(slot.targets):
+        if _targets_intersect(slot.targets, targets):
             score += 4
         if module and module in slot.modules:
             score += 2
@@ -772,3 +828,44 @@ def _select_key_slots(
             matches.append((score, slot))
     matches.sort(key=lambda item: (-item[0], item[1].id))
     return [slot for _, slot in matches]
+
+
+def _targets_intersect(patterns: list[str], targets: set[str]) -> bool:
+    return any(_target_matches_pattern(pattern, target) for pattern in patterns for target in targets)
+
+
+def _target_matches_pattern(pattern: str, target: str) -> bool:
+    if pattern == target:
+        return True
+    if "-" not in pattern:
+        return False
+
+    start, end = pattern.split("-", 1)
+    start_parts = _parse_target_token(start)
+    end_parts = _parse_target_token(end)
+    target_parts = _parse_target_token(target)
+    if start_parts is None or end_parts is None or target_parts is None:
+        return False
+
+    start_prefix, start_num, start_suffix = start_parts
+    end_prefix, end_num, end_suffix = end_parts
+    target_prefix, target_num, target_suffix = target_parts
+
+    if start_prefix == end_prefix == target_prefix and start_suffix == end_suffix == target_suffix:
+        return start_num <= target_num <= end_num
+
+    if (
+        start_prefix == end_prefix == target_prefix
+        and start_num == end_num == target_num
+        and len(start_suffix) == len(end_suffix) == len(target_suffix) == 1
+    ):
+        return ord(start_suffix) <= ord(target_suffix) <= ord(end_suffix)
+
+    return False
+
+
+def _parse_target_token(token: str) -> tuple[str, int, str] | None:
+    match = re.fullmatch(r"([A-Za-z]*)(\d+)([A-Za-z]*)", token)
+    if not match:
+        return None
+    return match.group(1), int(match.group(2)), match.group(3)

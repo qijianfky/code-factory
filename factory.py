@@ -440,6 +440,7 @@ async def run_module(
     *,
     base_branch: str,
     branch_prefix: str,
+    upstream_completed_ids: set[str] | None = None,
 ) -> None:
     """Run all tasks in a module, then E2E gate."""
     module.status = ModuleStatus.RUNNING
@@ -455,11 +456,11 @@ async def run_module(
         stats = module_stats(module)
         log(f"    --- iteration {iteration} | {stats} ---")
 
-        ready = get_ready_tasks(module.tasks, max_parallel)
+        ready = get_ready_tasks(module.tasks, max_parallel, completed_ids=upstream_completed_ids)
         if not ready:
             # Before declaring deadlock, check for pending scope resolution
             handle_scope_violations(module, project_dir)
-            ready = get_ready_tasks(module.tasks, max_parallel)
+            ready = get_ready_tasks(module.tasks, max_parallel, completed_ids=upstream_completed_ids)
             if not ready:
                 pending = [t for t in module.tasks if t.status == TaskStatus.PENDING]
                 if pending:
@@ -574,6 +575,15 @@ def load_state(project_dir: str) -> list[Module] | None:
     return modules
 
 
+def _merged_task_ids(modules: list[Module]) -> set[str]:
+    return {
+        task.id
+        for module in modules
+        for task in module.tasks
+        if task.status == TaskStatus.MERGED
+    }
+
+
 async def run_factory(spec_file: str, mockup_dir: str, project_dir: str,
                       resume: bool = False) -> None:
     project_path = Path(project_dir).resolve()
@@ -620,12 +630,17 @@ async def run_factory(spec_file: str, mockup_dir: str, project_dir: str,
     log("EXECUTION")
     log("=" * 60)
 
-    for module in modules:
+    for index, module in enumerate(modules):
         if module.status == ModuleStatus.PASSED:
             log(f"  Module [{module.id}] already passed, skipping")
             continue
+        upstream_completed_ids = _merged_task_ids(modules[:index])
         await run_module(
-            module, project_dir, base_branch=base_branch, branch_prefix=branch_prefix,
+            module,
+            project_dir,
+            base_branch=base_branch,
+            branch_prefix=branch_prefix,
+            upstream_completed_ids=upstream_completed_ids,
         )
         save_progress(modules, project_dir)
 

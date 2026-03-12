@@ -37,7 +37,7 @@ def test_build_duerp_modules_uses_manifest_and_skips_implemented(tmp_path) -> No
             "id": "email",
             "lanes": ["A2"],
             "modules": ["workspace"],
-            "targets": ["H1"],
+            "targets": ["H2"],
             "env_vars": ["EMAIL_HOST", "EMAIL_HOST_PASSWORD"],
             "ui_anchor": "G5 通知配置",
             "settings_anchor": [".env.integrations.example"],
@@ -133,6 +133,100 @@ def test_build_duerp_modules_adds_dependency_for_planned_list_screen(tmp_path) -
     tasks = {task.id: task for task in a2.tasks}
 
     assert tasks["A2-H1"].dependencies == ["A2-02"]
+
+
+def test_build_duerp_modules_adds_cross_module_integration_dependencies(tmp_path) -> None:
+    docs = tmp_path / "docs" / "parallel"
+    prompts = docs / "prompts"
+    prompts.mkdir(parents=True)
+    (docs / "MASTER_PLAN.md").write_text("# plan")
+    (docs / "KEY_SLOTS.json").write_text(json.dumps([
+        {
+            "id": "ai",
+            "lanes": ["A2"],
+            "modules": ["workspace"],
+            "targets": ["H8-H10"],
+            "env_vars": ["AI_API_KEY", "AI_MODEL"],
+            "ui_anchor": "G8 接口管理",
+            "settings_anchor": [".env.integrations.example"],
+            "notes": "AI provider should stay config-only",
+        },
+        {
+            "id": "travel",
+            "lanes": ["A5"],
+            "modules": ["oa"],
+            "targets": ["24b-24n"],
+            "env_vars": ["TRAVEL_APP_ID", "TRAVEL_APP_SECRET"],
+            "ui_anchor": "G8 接口管理",
+            "settings_anchor": [".env.integrations.example"],
+            "notes": "Travel provider should stay config-only",
+        },
+    ], ensure_ascii=False))
+    (docs / "SCREEN_MANIFEST.json").write_text(json.dumps([
+        {
+            "screen_id": "H9",
+            "title": "AI发文草稿",
+            "lane": "A2",
+            "module": "workspace",
+            "status": "planned",
+            "mockup": None,
+            "tags": ["dashboard", "ai", "authoring"],
+        },
+        {
+            "screen_id": "24h",
+            "title": "订酒店",
+            "lane": "A5",
+            "module": "oa",
+            "status": "planned",
+            "mockup": None,
+            "tags": ["travel", "booking"],
+        },
+    ], ensure_ascii=False))
+    (prompts / "codex-lane-template.md").write_text("# Codex Template")
+    (prompts / "claude-lane-template.md").write_text("# Claude Template")
+    (prompts / "lane-a2.md").write_text(
+        "# Lane A2 — 工作台\n\n"
+        "- 范围：工作台页面\n"
+        "- owner：A2\n"
+        "- blocked_by：A1\n"
+        "- handoff_to：A9\n"
+        "- tests：页面 smoke\n"
+    )
+    (prompts / "lane-a5.md").write_text(
+        "# Lane A5 — OA-HR\n\n"
+        "- 范围：OA 与人事页面\n"
+        "- owner：A5\n"
+        "- blocked_by：A1\n"
+        "- handoff_to：A9\n"
+        "- tests：OA smoke\n"
+    )
+    (prompts / "lane-a7.md").write_text(
+        "# Lane A7 — 设置平台\n\n"
+        "- 范围：设置与权限\n"
+        "- owner：A7\n"
+        "- blocked_by：A1\n"
+        "- handoff_to：A9\n"
+        "- tests：设置 smoke\n"
+    )
+    (prompts / "lane-a8.md").write_text(
+        "# Lane A8 — 集成平台\n\n"
+        "- 范围：适配器与渠道\n"
+        "- owner：A8\n"
+        "- blocked_by：A1\n"
+        "- handoff_to：A9\n"
+        "- tests：集成 smoke\n"
+    )
+
+    modules = build_duerp_modules(str(tmp_path))
+    order = [module.id for module in modules]
+    a2 = next(module for module in modules if module.id == "A2")
+    a5 = next(module for module in modules if module.id == "A5")
+
+    assert order.index("A8") < order.index("A2")
+    assert next(task for task in a2.tasks if task.id == "A2-H9").dependencies == ["A7-core-001", "A8-101"]
+    assert "AI_API_KEY" in next(task for task in a2.tasks if task.id == "A2-H9").description
+    assert next(task for task in a5.tasks if task.id == "A5-24h").dependencies == ["A8-102"]
+    assert "TRAVEL_APP_ID" in next(task for task in a5.tasks if task.id == "A5-24h").description
 
 
 def test_build_duerp_modules_splits_core_owned_paths(tmp_path) -> None:
