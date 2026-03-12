@@ -41,6 +41,28 @@ async def init_repo(project_dir: str, base_branch: str = MAIN_BRANCH) -> None:
                 "  git add -A && git commit -m 'baseline'  # to commit\n"
                 f"Dirty files:\n{status[:500]}"
             )
+        await _ensure_base_branch(project_dir, base_branch)
+
+
+async def _ensure_base_branch(project_dir: str, base_branch: str) -> None:
+    """Seed the configured base branch from HEAD when an existing repo does not have it yet."""
+    rc, _, _ = await run_git(["rev-parse", "--verify", base_branch], project_dir)
+    if rc == 0:
+        return
+
+    head_rc, _, head_err = await run_git(["rev-parse", "--verify", "HEAD"], project_dir)
+    if head_rc != 0:
+        raise RuntimeError(
+            f"Repository has no commits to seed base branch '{base_branch}': "
+            f"{head_err.strip() or 'HEAD is unavailable'}"
+        )
+
+    rc, _, err = await run_git(["branch", base_branch, "HEAD"], project_dir)
+    if rc != 0:
+        raise RuntimeError(
+            f"Failed to create base branch '{base_branch}' from HEAD: "
+            f"{err.strip() or 'git branch failed'}"
+        )
 
 
 async def seed_assets(project_dir: str, spec_file: str, mockup_files: list[str]) -> None:
@@ -83,7 +105,12 @@ async def create_worktree(project_dir: str, branch: str,
             await run_git(["branch", "-D", branch], project_dir)
 
         # Create branch from the configured integration branch.
-        await run_git(["branch", branch, base_branch], project_dir)
+        rc, _, err = await run_git(["branch", branch, base_branch], project_dir)
+        if rc != 0:
+            raise RuntimeError(
+                f"Failed to create branch '{branch}' from '{base_branch}': "
+                f"{err.strip() or 'git branch failed'}"
+            )
         rc, out, err = await run_git(["worktree", "add", worktree_path, branch], project_dir)
         if rc != 0:
             raise RuntimeError(f"Failed to create worktree: {err}")

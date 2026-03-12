@@ -130,8 +130,8 @@ def test_handle_scope_violations_falls_back_to_duerp_lane_for_shared_files(tmp_p
 
     factory.handle_scope_violations(module, str(tmp_path))
 
-    owner_task = next(task for task in module.tasks if task.id == "sales-001-owner1-a8")
-    assert owner_task.owner_lane == "A8"
+    owner_task = next(task for task in module.tasks if task.id == "sales-001-owner1-a8-core")
+    assert owner_task.owner_lane == "A8-core"
     assert owner_task.agent_type.value == "claude"
 
 

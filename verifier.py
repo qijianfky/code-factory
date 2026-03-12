@@ -2,6 +2,7 @@
 import asyncio
 import json
 import re
+import shlex
 from pathlib import Path
 
 from config import (
@@ -168,18 +169,16 @@ def _apply_task_scoped_pytest_targets(
 
     for command in commands:
         if isinstance(command, str):
-            marker = "python -m pytest"
-            idx = command.find(marker)
-            if idx == -1:
+            rewritten = _rewrite_pytest_shell_command(command, targets)
+            if rewritten is None:
                 replaced.append(command)
                 continue
-            prefix = command[:idx]
-            replaced.append(f"{prefix}{scoped_pytest}")
+            replaced.append(rewritten)
             saw_pytest = True
             continue
 
         if command[:3] == ["python", "-m", "pytest"]:
-            replaced.append(["python", "-m", "pytest", *targets, "-q", "--tb=short"])
+            replaced.append(_rewrite_pytest_argv(command, targets))
             saw_pytest = True
             continue
 
@@ -200,8 +199,8 @@ def _load_agents_gate_commands(project_dir: str) -> list[str]:
     text = agents_file.read_text()
     match = None
     for section in (AGENTS_GATE_SECTION, "质量门禁"):
-        pattern = rf"##\s+{re.escape(section)}.*?```bash\n(.*?)```"
-        match = re.search(pattern, text, re.DOTALL)
+        pattern = rf"##\s+{re.escape(section)}.*?```(?:bash|sh|shell)?\n(.*?)```"
+        match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
         if match:
             break
     if match is None:
@@ -230,6 +229,84 @@ def _load_agents_gate_commands(project_dir: str) -> list[str]:
     if prefix:
         return [f"{prefix} && {command}" for command in commands]
     return commands
+
+
+_PYTEST_COMMAND_RE = re.compile(
+    r"python\s+-m\s+pytest\b.*?(?=(?:\s*(?:&&|\|\||;)|$))",
+    re.DOTALL,
+)
+
+_PYTEST_VALUE_OPTIONS = {
+    "-c",
+    "-k",
+    "-m",
+    "-n",
+    "-o",
+    "--basetemp",
+    "--confcutdir",
+    "--cov",
+    "--cov-config",
+    "--cov-fail-under",
+    "--cov-report",
+    "--dist",
+    "--durations",
+    "--durations-min",
+    "--ignore",
+    "--ignore-glob",
+    "--junitxml",
+    "--last-failed-no-failures",
+    "--lfnf",
+    "--log-cli-date-format",
+    "--log-cli-format",
+    "--log-date-format",
+    "--log-format",
+    "--maxfail",
+    "--maxprocesses",
+    "--override-ini",
+    "--pyargs",
+    "--rootdir",
+    "--tb",
+    "--timeout",
+    "--timeout-method",
+}
+
+
+def _rewrite_pytest_shell_command(command: str, targets: list[str]) -> str | None:
+    """Rewrite just the pytest segment so shell chains survive untouched."""
+    match = _PYTEST_COMMAND_RE.search(command)
+    if match is None:
+        return None
+
+    rewritten = shlex.join(_rewrite_pytest_argv(shlex.split(match.group(0)), targets))
+    return f"{command[:match.start()]}{rewritten}{command[match.end():]}"
+
+
+def _rewrite_pytest_argv(command: list[str], targets: list[str]) -> list[str]:
+    """Replace positional pytest targets while preserving existing flags and option values."""
+    prefix = command[:3]
+    remainder = command[3:]
+    preserved: list[str] = []
+    idx = 0
+
+    while idx < len(remainder):
+        arg = remainder[idx]
+        if arg.startswith("-"):
+            preserved.append(arg)
+            if (
+                arg in _PYTEST_VALUE_OPTIONS
+                and idx + 1 < len(remainder)
+                and not remainder[idx + 1].startswith("-")
+            ):
+                preserved.append(remainder[idx + 1])
+                idx += 1
+        idx += 1
+
+    if not any(arg in {"-q", "--quiet"} for arg in preserved):
+        preserved.append("-q")
+    if not any(arg == "--tb" or arg.startswith("--tb=") for arg in preserved):
+        preserved.append("--tb=short")
+
+    return [*prefix, *targets, *preserved]
 
 
 async def _spawn_gate_command(

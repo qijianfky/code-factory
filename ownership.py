@@ -71,7 +71,7 @@ def _parse_ownership(path: Path) -> OwnershipConfig:
             parse_forbidden = False
             continue
         if line.startswith("### "):
-            lane_match = re.match(r"###\s+(A\d+)\b", line)
+            lane_match = re.match(r"###\s+(A\d+(?:-core)?)\b", line)
             current_lane = lane_match.group(1) if lane_match else ""
             parse_forbidden = False
             continue

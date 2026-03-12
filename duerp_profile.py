@@ -1,6 +1,7 @@
 """DUERP-specific profile inputs for planning, prompting, and gates."""
 from __future__ import annotations
 
+import fnmatch
 import json
 import re
 from dataclasses import dataclass, field
@@ -39,11 +40,22 @@ DUERP_LANE_AGENT_TYPES = {
     "A8": AgentType.CLAUDE,
 }
 
-DUERP_LANE_OWNED_PATHS = {
+DUERP_MODULE_OWNED_PATHS = {
     "A1": [
         "templates/base.html",
         "templates/components/",
         "static/js/stores/",
+    ],
+    "A7-core": [
+        "core/permissions/",
+        "core/health/",
+    ],
+    "A8-core": [
+        "core/integration/",
+        "core/integrations/registry.py",
+        "core/integrations/health.py",
+        "core/integrations/feature_gates.py",
+        "core/integrations/attachments.py",
     ],
     "A2": [
         "dashboard/",
@@ -85,34 +97,21 @@ DUERP_LANE_OWNED_PATHS = {
         "accounts/",
         "org/",
         "projects/",
-        "core/permissions/",
-        "core/health/",
         "templates/settings/",
         "templates/projects/",
         "templates/system/",
         "templates/org/",
     ],
     "A8": [
-        "core/integrations/",
-        "core/integration/",
+        "core/integrations/adapters/",
+        "core/integrations/providers/",
+        "core/integrations/channels/",
+        "core/integrations/tests/",
         "templates/components/share_sheet.html",
     ],
     "A9": [
         "test/",
-        "accounts/tests/",
-        "approval/tests/",
-        "contracts/tests/",
         "core/inbox/tests/",
-        "core/integrations/tests/",
-        "dashboard/tests/",
-        "finance/tests/",
-        "hr/tests/",
-        "oa/tests/",
-        "org/tests/",
-        "procurement/tests/",
-        "projects/tests/",
-        "sales/tests/",
-        "warehouse/tests/",
     ],
 }
 
@@ -137,8 +136,8 @@ DUERP_MODULE_FILE_HINTS = {
     "finance": ["finance/", "templates/finance/"],
     "reports": ["finance/", "dashboard/reports.py", "templates/finance/", "templates/reports/"],
     "projects": ["projects/", "templates/projects/"],
-    "settings": ["accounts/", "org/", "core/permissions/", "templates/settings/"],
-    "system_health": ["core/health/", "templates/system/"],
+    "settings": ["accounts/", "org/", "templates/settings/"],
+    "system_health": ["templates/system/"],
 }
 
 DUERP_LANE_TEST_TARGETS = {
@@ -329,7 +328,11 @@ def resolve_branch_prefix(project_dir: str, fallback: str) -> str:
 
 
 def agent_type_for_lane(lane: str) -> AgentType:
-    return DUERP_LANE_AGENT_TYPES.get(lane, AgentType.CODEX)
+    return DUERP_LANE_AGENT_TYPES.get(_duerp_base_lane(lane), AgentType.CODEX)
+
+
+def _duerp_base_lane(lane: str) -> str:
+    return lane.split("-", 1)[0]
 
 
 def load_lane_specs(project_dir: str) -> dict[str, LaneSpec]:
@@ -409,7 +412,7 @@ def _load_key_slots_cached(project_dir: str) -> list[KeySlotSpec]:
 
 def load_lane_prompt_bundle(project_dir: str, lane: str) -> str:
     specs = load_lane_specs(project_dir)
-    spec = specs.get(lane)
+    spec = specs.get(_duerp_base_lane(lane))
     if spec is None:
         return ""
 
@@ -429,12 +432,12 @@ def build_duerp_modules(project_dir: str) -> list[Module]:
     module_order = ["A1", "A7-core", "A8-core", "A2", "A3", "A5", "A4", "A6", "A7", "A8", "A9"]
 
     for module_id in module_order:
-        lane = module_id.split("-")[0]
+        lane = _duerp_base_lane(module_id)
         lane_spec = lane_specs.get(lane)
         if lane_spec is None:
             continue
 
-        owned_paths = list(DUERP_LANE_OWNED_PATHS.get(lane, []))
+        owned_paths = list(DUERP_MODULE_OWNED_PATHS.get(module_id, []))
         tasks = []
 
         for static_task in DUERP_STATIC_TASKS.get(module_id, []):
@@ -446,10 +449,10 @@ def build_duerp_modules(project_dir: str) -> list[Module]:
                 ),
                 module_id=module_id,
                 files=owned_paths or ["docs/parallel/"],
-                forbidden_files=_forbidden_for_lane(lane),
+                forbidden_files=_forbidden_for_module(module_id),
                 dependencies=[],
                 agent_type=lane_spec.agent_type,
-                owner_lane=lane,
+                owner_lane=module_id,
             ))
 
         if module_id in {"A2", "A3", "A4", "A5", "A6", "A7"}:
@@ -468,11 +471,11 @@ def build_duerp_modules(project_dir: str) -> list[Module]:
                         screen,
                     ),
                     module_id=module_id,
-                    files=_file_hints_for_screen(screen, lane) or owned_paths,
-                    forbidden_files=_forbidden_for_lane(lane),
+                    files=_file_hints_for_screen(screen, module_id) or owned_paths,
+                    forbidden_files=_forbidden_for_module(module_id),
                     dependencies=dependencies,
                     agent_type=lane_spec.agent_type,
-                    owner_lane=lane,
+                    owner_lane=module_id,
                 ))
 
         modules.append(Module(
@@ -491,7 +494,7 @@ def resolve_task_scoped_pytest_targets(project_dir: str, tasks: list[Task]) -> l
         return []
 
     lanes = {
-        (task.owner_lane or task.module_id.split("-")[0])
+        _duerp_base_lane(task.owner_lane or task.module_id)
         for task in tasks
         if task.id
     }
@@ -507,15 +510,17 @@ def resolve_task_scoped_pytest_targets(project_dir: str, tasks: list[Task]) -> l
 
 def find_duerp_lane_for_path(filepath: str) -> str:
     normalized = filepath.lstrip("./")
-    for lane, patterns in DUERP_LANE_OWNED_PATHS.items():
+    best_lane = ""
+    best_specificity = (-1, -1)
+    for lane, patterns in DUERP_MODULE_OWNED_PATHS.items():
         for pattern in patterns:
-            if pattern.endswith("/") and normalized.startswith(pattern):
-                return lane
-            if normalized == pattern:
-                return lane
-            if "*" in pattern and Path(normalized).match(pattern):
-                return lane
-    return ""
+            if not _owned_path_matches(normalized, pattern):
+                continue
+            specificity = _owned_path_specificity(pattern)
+            if specificity > best_specificity:
+                best_lane = lane
+                best_specificity = specificity
+    return best_lane
 
 
 def _module_display_name(module_id: str, base_name: str) -> str:
@@ -526,13 +531,79 @@ def _module_display_name(module_id: str, base_name: str) -> str:
     return base_name
 
 
-def _forbidden_for_lane(lane: str) -> list[str]:
+def _forbidden_for_module(module_id: str) -> list[str]:
     forbidden = list(PROTECTED_FILES)
-    for other_lane, owned in DUERP_LANE_OWNED_PATHS.items():
-        if other_lane == lane:
+    owned_paths = DUERP_MODULE_OWNED_PATHS.get(module_id, [])
+    for other_module, owned in DUERP_MODULE_OWNED_PATHS.items():
+        if other_module == module_id:
             continue
-        forbidden.extend(owned)
+        for path in owned:
+            if _path_is_carved_out(path, owned_paths):
+                continue
+            forbidden.append(path)
     return _dedupe_preserve(forbidden)
+
+
+def _owned_path_matches(filepath: str, pattern: str) -> bool:
+    normalized_pattern = pattern.lstrip("./")
+    if filepath == normalized_pattern:
+        return True
+    if normalized_pattern.endswith("/") and filepath.startswith(normalized_pattern):
+        return True
+    if any(char in normalized_pattern for char in "*?["):
+        return fnmatch.fnmatch(filepath, normalized_pattern)
+    return False
+
+
+def _owned_path_specificity(pattern: str) -> tuple[int, int]:
+    normalized = pattern.lstrip("./")
+    if any(char in normalized for char in "*?["):
+        kind = 1
+    elif normalized.endswith("/"):
+        kind = 2
+    else:
+        kind = 3
+    return kind, len(normalized.rstrip("/"))
+
+
+def _path_is_carved_out(candidate: str, owned_paths: list[str]) -> bool:
+    """Check if a candidate forbidden path is already covered by an owned path.
+
+    Rules:
+    - Exact match → always carve out.
+    - Candidate is a directory, owned is a *file* inside it → carve out
+      (the scope check prevents touching other files in the directory).
+    - Candidate is a directory, owned is a *subdirectory* → do NOT carve out.
+      A child directory (e.g. procurement/tests/) must not carve out its
+      parent (procurement/) — that would expose non-owned siblings like
+      procurement/models.py.
+    """
+    candidate_norm = candidate.lstrip("./")
+    for owned in owned_paths:
+        owned_norm = owned.lstrip("./")
+        if candidate_norm == owned_norm:
+            return True
+        if (candidate_norm.endswith("/")
+                and not owned_norm.endswith("/")
+                and owned_norm.startswith(candidate_norm)):
+            return True
+    return False
+
+
+def _owned_paths_overlap(left: str, right: str) -> bool:
+    left_norm = left.lstrip("./")
+    right_norm = right.lstrip("./")
+    if left_norm == right_norm:
+        return True
+    if left_norm.endswith("/") and right_norm.startswith(left_norm):
+        return True
+    if right_norm.endswith("/") and left_norm.startswith(right_norm):
+        return True
+    if any(char in left_norm for char in "*?[") and fnmatch.fnmatch(right_norm.rstrip("/"), left_norm):
+        return True
+    if any(char in right_norm for char in "*?[") and fnmatch.fnmatch(left_norm.rstrip("/"), right_norm):
+        return True
+    return False
 
 
 def _compose_task_description(
@@ -564,11 +635,11 @@ def _compose_task_description(
     return "\n".join(lines)
 
 
-def _file_hints_for_screen(screen: ScreenSpec, lane: str) -> list[str]:
+def _file_hints_for_screen(screen: ScreenSpec, module_id: str) -> list[str]:
     hints = list(DUERP_MODULE_FILE_HINTS.get(screen.module, []))
     if hints:
         return hints
-    return list(DUERP_LANE_OWNED_PATHS.get(lane, []))
+    return list(DUERP_MODULE_OWNED_PATHS.get(module_id, []))
 
 
 def _infer_screen_dependencies(

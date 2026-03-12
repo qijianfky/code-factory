@@ -1,6 +1,8 @@
 import json
 
 from duerp_profile import (
+    DUERP_MODULE_OWNED_PATHS,
+    _forbidden_for_module,
     build_duerp_modules,
     find_duerp_lane_for_path,
     load_lane_prompt_bundle,
@@ -81,6 +83,46 @@ def test_build_duerp_modules_uses_manifest_and_skips_implemented(tmp_path) -> No
     assert "EMAIL_HOST" in a2.tasks[0].description
 
 
+def test_build_duerp_modules_splits_core_owned_paths(tmp_path) -> None:
+    prompts = tmp_path / "docs" / "parallel" / "prompts"
+    prompts.mkdir(parents=True)
+    (tmp_path / "docs" / "parallel" / "MASTER_PLAN.md").write_text("# plan")
+    (prompts / "codex-lane-template.md").write_text("# Codex Template")
+    (prompts / "claude-lane-template.md").write_text("# Claude Template")
+    (prompts / "lane-a7.md").write_text(
+        "# Lane A7 — 权限系统\n\n"
+        "- 范围：权限与设置\n"
+        "- owner：A7\n"
+        "- blocked_by：A1\n"
+        "- handoff_to：A9\n"
+        "- tests：权限 smoke\n"
+    )
+    (prompts / "lane-a8.md").write_text(
+        "# Lane A8 — 集成平台\n\n"
+        "- 范围：集成与适配器\n"
+        "- owner：A8\n"
+        "- blocked_by：A1\n"
+        "- handoff_to：A9\n"
+        "- tests：集成 smoke\n"
+    )
+    (prompts / "lane-a9.md").write_text(
+        "# Lane A9 — 回归验证\n\n"
+        "- 范围：全链路回归\n"
+        "- owner：A9\n"
+        "- blocked_by：A8\n"
+        "- handoff_to：无\n"
+        "- tests：E2E smoke\n"
+    )
+
+    modules = {module.id: module for module in build_duerp_modules(str(tmp_path))}
+
+    assert set(modules["A7-core"].owned_paths).isdisjoint(modules["A7"].owned_paths)
+    assert set(modules["A8-core"].owned_paths).isdisjoint(modules["A8"].owned_paths)
+    assert set(modules["A9"].owned_paths).isdisjoint(DUERP_MODULE_OWNED_PATHS["A4"])
+    assert modules["A7-core"].tasks[0].owner_lane == "A7-core"
+    assert modules["A8-core"].tasks[0].owner_lane == "A8-core"
+
+
 def test_load_lane_prompt_bundle_combines_template_and_lane_prompt(tmp_path) -> None:
     prompts = tmp_path / "docs" / "parallel" / "prompts"
     prompts.mkdir(parents=True)
@@ -123,4 +165,29 @@ def test_resolve_task_scoped_pytest_targets_uses_lane_mapping(tmp_path) -> None:
 
 def test_find_duerp_lane_for_path_uses_owned_paths() -> None:
     assert find_duerp_lane_for_path("templates/base.html") == "A1"
-    assert find_duerp_lane_for_path("core/integrations/registry.py") == "A8"
+    assert find_duerp_lane_for_path("templates/components/share_sheet.html") == "A8"
+    assert find_duerp_lane_for_path("dashboard/reports.py") == "A6"
+    assert find_duerp_lane_for_path("core/permissions/policy.py") == "A7-core"
+    assert find_duerp_lane_for_path("core/integrations/registry.py") == "A8-core"
+    assert find_duerp_lane_for_path("core/integrations/adapters/tax.py") == "A8"
+    assert find_duerp_lane_for_path("sales/tests/test_orders.py") == "A4"
+    assert find_duerp_lane_for_path("test/test_phase8_e2e.py") == "A9"
+
+
+def test_forbidden_paths_respect_more_specific_module_ownership() -> None:
+    a8_forbidden = _forbidden_for_module("A8")
+    a6_forbidden = _forbidden_for_module("A6")
+    a1_forbidden = _forbidden_for_module("A1")
+    a2_forbidden = _forbidden_for_module("A2")
+
+    assert "templates/components/" not in a8_forbidden
+    assert "dashboard/" not in a6_forbidden
+    assert "templates/components/share_sheet.html" in a1_forbidden
+    assert "dashboard/reports.py" in a2_forbidden
+
+    # A9 owns test/ and core/inbox/tests/ — other module paths stay forbidden
+    a9_forbidden = _forbidden_for_module("A9")
+    assert "procurement/" in a9_forbidden
+    assert "sales/" in a9_forbidden
+    assert "dashboard/" in a9_forbidden
+    assert "core/integrations/tests/" in a9_forbidden  # owned by A8, not A9
