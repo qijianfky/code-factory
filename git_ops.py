@@ -3,7 +3,7 @@ import asyncio
 import shutil
 from pathlib import Path
 
-from config import MAIN_BRANCH
+from config import MAIN_BRANCH, RUNTIME_ARTIFACT_FILES
 
 _git_write_lock = asyncio.Lock()
 
@@ -32,16 +32,30 @@ async def init_repo(project_dir: str, base_branch: str = MAIN_BRANCH) -> None:
     else:
         # Existing repo: check for uncommitted changes
         rc, status, _ = await run_git(["status", "--porcelain"], project_dir)
-        if status.strip():
-            dirty_count = len(status.strip().splitlines())
+        dirty_lines = [
+            line for line in status.strip().splitlines()
+            if not _is_ignorable_runtime_artifact(line)
+        ]
+        if dirty_lines:
+            dirty_count = len(dirty_lines)
             raise RuntimeError(
                 f"Working directory has {dirty_count} uncommitted changes. "
                 "Commit or stash them before running code factory.\n"
                 "  git stash        # to stash\n"
                 "  git add -A && git commit -m 'baseline'  # to commit\n"
-                f"Dirty files:\n{status[:500]}"
+                f"Dirty files:\n{''.join(f'{line}\n' for line in dirty_lines)[:500]}"
             )
         await _ensure_base_branch(project_dir, base_branch)
+
+
+def _is_ignorable_runtime_artifact(status_line: str) -> bool:
+    """Allow reruns when only factory-generated artifacts are dirty."""
+    if len(status_line) < 4:
+        return False
+    path = status_line[3:].strip()
+    if " -> " in path:
+        path = path.rsplit(" -> ", 1)[-1].strip()
+    return path in RUNTIME_ARTIFACT_FILES
 
 
 async def _ensure_base_branch(project_dir: str, base_branch: str) -> None:

@@ -4,7 +4,7 @@ import pytest
 
 import planner
 from models import Module
-from planner import _validate_ownership
+from planner import _validate_modules, _validate_ownership
 
 
 def test_validate_ownership_rejects_nested_paths() -> None:
@@ -28,6 +28,35 @@ def test_validate_ownership_allows_disjoint_paths() -> None:
     }
 
     _validate_ownership(plan)
+
+
+def test_validate_modules_rejects_unknown_dependency() -> None:
+    plan = {
+        "modules": [
+            {
+                "id": "workspace",
+                "tasks": [
+                    {"id": "workspace-001", "dependencies": []},
+                    {"id": "workspace-002", "dependencies": ["workspace-404"]},
+                ],
+            },
+        ],
+    }
+
+    with pytest.raises(ValueError, match="depends on unknown task"):
+        _validate_modules(plan)
+
+
+def test_validate_modules_rejects_duplicate_task_ids() -> None:
+    plan = {
+        "modules": [
+            {"id": "a", "tasks": [{"id": "dup", "dependencies": []}]},
+            {"id": "b", "tasks": [{"id": "dup", "dependencies": []}]},
+        ],
+    }
+
+    with pytest.raises(ValueError, match="Duplicate task id"):
+        _validate_modules(plan)
 
 
 def test_plan_uses_duerp_profile_without_spawning_agent(tmp_path, monkeypatch) -> None:

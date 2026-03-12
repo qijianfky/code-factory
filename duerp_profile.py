@@ -235,7 +235,7 @@ DUERP_STATIC_TASKS = {
         {
             "id": "A8-101",
             "title": "实现 AI/OCR/对象存储适配器",
-            "description": "接通 openclaw、ocr、minio 三类适配器，并为页面入口提供真实门控。",
+            "description": "接通通用 ai provider（默认 DeepSeek）、ocr、minio 三类适配器，并为页面入口提供真实门控；交付后项目侧应只需填写 .env 即可启用。",
         },
         {
             "id": "A8-102",
@@ -648,14 +648,31 @@ def _infer_screen_dependencies(
     if "详情" not in screen.title and "画像" not in screen.title and "新建" not in screen.title:
         return []
 
+    screen_tags = {tag for tag in screen.tags if tag not in {"detail", "create"}}
+    best_candidate: ScreenSpec | None = None
+    best_score = 0
+
     for candidate in lane_screens:
         if candidate.screen_id == screen.screen_id:
             continue
         if candidate.module != screen.module:
             continue
-        if "列表" in candidate.title or "中心" in candidate.title or "台账" in candidate.title:
-            return [f"{module_id}-{candidate.screen_id}"]
-    return []
+        if candidate.status == "implemented":
+            continue
+        if "列表" not in candidate.title and "中心" not in candidate.title and "台账" not in candidate.title:
+            continue
+
+        candidate_tags = {
+            tag for tag in candidate.tags if tag not in {"list", "center", "inventory"}
+        }
+        score = len(screen_tags & candidate_tags)
+        if score > best_score:
+            best_candidate = candidate
+            best_score = score
+
+    if best_candidate is None or best_score == 0:
+        return []
+    return [f"{module_id}-{best_candidate.screen_id}"]
 
 
 def _task_is_frontend(task: Task) -> bool:

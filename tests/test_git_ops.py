@@ -2,6 +2,7 @@ import asyncio
 from pathlib import Path
 
 import git_ops
+import pytest
 
 
 def test_init_repo_creates_missing_base_branch_for_existing_repo(tmp_path, monkeypatch) -> None:
@@ -31,6 +32,44 @@ def test_init_repo_creates_missing_base_branch_for_existing_repo(tmp_path, monke
         args == ["branch", "feature/unified-architecture", "HEAD"]
         for args, _ in commands
     )
+
+
+def test_init_repo_ignores_factory_runtime_artifacts(tmp_path, monkeypatch) -> None:
+    commands = []
+
+    async def fake_run_git(args, cwd):
+        commands.append((args, cwd))
+        if args == ["status", "--porcelain"]:
+            return 0, "?? factory_plan.json\n?? factory-progress.txt\n", ""
+        if args == ["rev-parse", "--verify", "feature/unified-architecture"]:
+            return 0, "abc123\n", ""
+        return 0, "", ""
+
+    monkeypatch.setattr(git_ops, "run_git", fake_run_git)
+
+    project_dir = tmp_path / "repo"
+    project_dir.mkdir()
+    (project_dir / ".git").mkdir()
+
+    asyncio.run(git_ops.init_repo(str(project_dir), "feature/unified-architecture"))
+
+    assert commands[0][0] == ["status", "--porcelain"]
+
+
+def test_init_repo_still_rejects_real_dirty_files(tmp_path, monkeypatch) -> None:
+    async def fake_run_git(args, cwd):
+        if args == ["status", "--porcelain"]:
+            return 0, "?? factory_plan.json\n M sales/models.py\n", ""
+        return 0, "", ""
+
+    monkeypatch.setattr(git_ops, "run_git", fake_run_git)
+
+    project_dir = tmp_path / "repo"
+    project_dir.mkdir()
+    (project_dir / ".git").mkdir()
+
+    with pytest.raises(RuntimeError, match="sales/models.py"):
+        asyncio.run(git_ops.init_repo(str(project_dir), "feature/unified-architecture"))
 
 
 def test_create_worktree_uses_configured_base_branch(tmp_path, monkeypatch) -> None:

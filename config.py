@@ -19,6 +19,11 @@ CODEX_EFFORT = os.getenv("CODE_FACTORY_CODEX_EFFORT", "xhigh")
 
 TASK_FILE = "task_list.json"
 PROGRESS_FILE = "factory-progress.txt"
+RUNTIME_ARTIFACT_FILES = {
+    PROGRESS_FILE,
+    "factory_plan.json",
+    "factory_state.json",
+}
 
 # Protected files that NO task agent may modify
 PROTECTED_FILES = [
@@ -31,6 +36,7 @@ PROTECTED_FILES = [
     "_assets/**",
     "factory_plan.json",
     "factory_state.json",
+    PROGRESS_FILE,
 ]
 
 # Quality gate commands (run in order, ALL must pass)

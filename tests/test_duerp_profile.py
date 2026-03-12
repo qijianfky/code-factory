@@ -55,6 +55,15 @@ def test_build_duerp_modules_uses_manifest_and_skips_implemented(tmp_path) -> No
             "tags": ["dashboard"],
         },
         {
+            "screen_id": "02",
+            "title": "待办中心",
+            "lane": "A2",
+            "module": "workspace",
+            "status": "implemented",
+            "mockup": "02-inbox.png",
+            "tags": ["inbox"],
+        },
+        {
             "screen_id": "H1",
             "title": "任务详情",
             "lane": "A2",
@@ -78,9 +87,52 @@ def test_build_duerp_modules_uses_manifest_and_skips_implemented(tmp_path) -> No
     a2 = next(module for module in modules if module.id == "A2")
 
     assert [task.id for task in a2.tasks] == ["A2-H1"]
+    assert a2.tasks[0].dependencies == []
     assert "templates/base.html" in a2.tasks[0].forbidden_files
     assert "django-notifications" in a2.tasks[0].description
     assert "EMAIL_HOST" in a2.tasks[0].description
+
+
+def test_build_duerp_modules_adds_dependency_for_planned_list_screen(tmp_path) -> None:
+    docs = tmp_path / "docs" / "parallel"
+    prompts = docs / "prompts"
+    prompts.mkdir(parents=True)
+    (docs / "MASTER_PLAN.md").write_text("# plan")
+    (docs / "SCREEN_MANIFEST.json").write_text(json.dumps([
+        {
+            "screen_id": "02",
+            "title": "任务中心",
+            "lane": "A2",
+            "module": "workspace",
+            "status": "planned",
+            "mockup": None,
+            "tags": ["tasks", "center"],
+        },
+        {
+            "screen_id": "H1",
+            "title": "任务详情",
+            "lane": "A2",
+            "module": "workspace",
+            "status": "planned",
+            "mockup": None,
+            "tags": ["tasks"],
+        },
+    ], ensure_ascii=False))
+    (prompts / "codex-lane-template.md").write_text("# Codex Template")
+    (prompts / "lane-a2.md").write_text(
+        "# Lane A2 — 工作台\n\n"
+        "- 范围：工作台页面\n"
+        "- owner：A2\n"
+        "- blocked_by：A1\n"
+        "- handoff_to：A9\n"
+        "- tests：页面 smoke\n"
+    )
+
+    modules = build_duerp_modules(str(tmp_path))
+    a2 = next(module for module in modules if module.id == "A2")
+    tasks = {task.id: task for task in a2.tasks}
+
+    assert tasks["A2-H1"].dependencies == ["A2-02"]
 
 
 def test_build_duerp_modules_splits_core_owned_paths(tmp_path) -> None:

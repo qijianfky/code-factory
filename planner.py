@@ -77,6 +77,7 @@ async def plan(spec_file: str, mockup_files: list[str], project_dir: str) -> lis
     """Call Claude Code to generate phased module plan."""
     if is_duerp_project(project_dir):
         modules = build_duerp_modules(project_dir)
+        _validate_modules(_serialize_modules(modules))
         (Path(project_dir) / "factory_plan.json").write_text(
             json.dumps(_serialize_modules(modules), indent=2, ensure_ascii=False),
         )
@@ -110,6 +111,7 @@ async def plan(spec_file: str, mockup_files: list[str], project_dir: str) -> lis
 
     # Validate: no overlapping owned_paths
     _validate_ownership(plan_data)
+    _validate_modules(plan_data)
 
     # Save full plan
     (Path(project_dir) / "factory_plan.json").write_text(
@@ -221,6 +223,31 @@ def _validate_ownership(plan_data: dict) -> None:
                         f"overlaps with '{claimed_path}' owned by [{owner}]"
                     )
             seen.append((normalized, m["id"]))
+
+
+def _validate_modules(plan_data: dict) -> None:
+    """Validate task IDs and intra-module dependencies."""
+    seen_task_ids: set[str] = set()
+
+    for module in plan_data.get("modules", []):
+        task_ids = set()
+        for task in module.get("tasks", []):
+            task_id = task["id"]
+            if task_id in seen_task_ids:
+                raise ValueError(f"Duplicate task id: {task_id}")
+            seen_task_ids.add(task_id)
+            task_ids.add(task_id)
+
+        for task in module.get("tasks", []):
+            task_id = task["id"]
+            for dep in task.get("dependencies", []):
+                if dep == task_id:
+                    raise ValueError(f"Task [{task_id}] cannot depend on itself")
+                if dep not in task_ids:
+                    raise ValueError(
+                        f"Task [{task_id}] in module [{module['id']}] depends on unknown "
+                        f"task [{dep}]"
+                    )
 
 
 def _normalize_owned_path(path: str) -> str:
