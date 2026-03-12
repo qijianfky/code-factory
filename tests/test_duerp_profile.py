@@ -229,6 +229,39 @@ def test_build_duerp_modules_adds_cross_module_integration_dependencies(tmp_path
     assert "TRAVEL_APP_ID" in next(task for task in a5.tasks if task.id == "A5-24h").description
 
 
+def test_build_duerp_modules_keeps_attendance_as_native_erp_flow(tmp_path) -> None:
+    docs = tmp_path / "docs" / "parallel"
+    prompts = docs / "prompts"
+    prompts.mkdir(parents=True)
+    (docs / "MASTER_PLAN.md").write_text("# plan")
+    (docs / "KEY_SLOTS.json").write_text(json.dumps([], ensure_ascii=False))
+    (docs / "SCREEN_MANIFEST.json").write_text(json.dumps([
+        {
+            "screen_id": "21d",
+            "title": "考勤更正申请",
+            "lane": "A5",
+            "module": "oa",
+            "status": "planned",
+            "mockup": None,
+            "tags": ["oa", "attendance"],
+        },
+    ], ensure_ascii=False))
+    (prompts / "codex-lane-template.md").write_text("# Codex Template")
+    (prompts / "lane-a5.md").write_text(
+        "# Lane A5 — OA-HR\n\n"
+        "- 范围：OA 与人事页面\n"
+        "- owner：A5\n"
+        "- blocked_by：A1\n"
+        "- handoff_to：A9\n"
+        "- tests：OA smoke\n"
+    )
+
+    modules = build_duerp_modules(str(tmp_path))
+    a5 = next(module for module in modules if module.id == "A5")
+
+    assert next(task for task in a5.tasks if task.id == "A5-21d").dependencies == []
+
+
 def test_build_duerp_modules_splits_core_owned_paths(tmp_path) -> None:
     prompts = tmp_path / "docs" / "parallel" / "prompts"
     prompts.mkdir(parents=True)

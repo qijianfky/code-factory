@@ -245,7 +245,7 @@ DUERP_STATIC_TASKS = {
         {
             "id": "A8-103",
             "title": "整合硬件接口与健康面板",
-            "description": "把 weighing、bank、attendance 接入统一健康聚合和设置页测试入口。",
+            "description": "把 weighing、bank 接入统一健康聚合和设置页测试入口。",
         },
     ],
     "A9": [
@@ -273,7 +273,6 @@ DUERP_A8_TASK_BY_SLOT = {
     "sms": "A8-102",
     "wecom": "A8-102",
     "bank": "A8-103",
-    "attendance": "A8-103",
     "weighing": "A8-103",
 }
 
@@ -287,7 +286,6 @@ DUERP_A8_TASK_BY_TAG = {
     "sms": "A8-102",
     "wecom": "A8-102",
     "bank": "A8-103",
-    "attendance": "A8-103",
     "weighing": "A8-103",
 }
 
